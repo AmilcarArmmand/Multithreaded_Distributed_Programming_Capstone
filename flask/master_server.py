@@ -1,18 +1,9 @@
 #!/usr/bin/python3
 from xmlrpc.server import SimpleXMLRPCServer
-import logging
+from loguru import logger
 import time
 import threading
 from collections import defaultdict
-from datetime import datetime
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("master_server.log"), logging.StreamHandler()],
-)
-logger = logging.getLogger("MasterServer")
 
 
 class MasterServer:
@@ -22,8 +13,8 @@ class MasterServer:
         )
 
         # System state
-        self.chunk_servers = {}  # server_id -> last_heartbeat, chunks, metadata
-        self.videos = {}  # video_id -> video metadata
+        self.chunk_servers = {}
+        self.videos = {}
         self.uploads_today = 0
         self.last_reset = time.time()
 
@@ -31,20 +22,19 @@ class MasterServer:
         logger.info(f"Master Server initialized on {host}:{port}")
 
     def setup_methods(self):
-        """Register all RPC methods"""
         self.server.register_function(self.ping)
         self.server.register_function(self.heartbeat)
         self.server.register_function(self.register_video)
         self.server.register_function(self.get_system_status)
         self.server.register_function(self.get_chunk_servers)
         self.server.register_function(self.register_chunk)
+        self.server.register_function(self.list_videos)
+        self.server.register_function(self.get_video_details)
 
     def ping(self):
-        """Simple health check"""
         return "pong"
 
     def heartbeat(self, server_id, server_info):
-        """Process heartbeat from chunk servers"""
         current_time = time.time()
         self.chunk_servers[server_id] = {
             "last_heartbeat": current_time,
@@ -52,25 +42,29 @@ class MasterServer:
             "status": "healthy",
         }
 
-        logger.info(f"Heartbeat from {server_id} - Load: {server_info.get('load', 0)}")
+        logger.info(
+            f"Heartbeat from {server_id}",
+            server_id=server_id,
+            load=server_info.get("load", 0),
+        )
         return {"status": "ack", "timestamp": current_time}
 
     def register_video(self, video_data):
-        """Register a new video in the system"""
         video_id = video_data["video_id"]
         self.videos[video_id] = video_data
         self.uploads_today += 1
 
         logger.info(
-            f"Video registered - ID: {video_id}, Title: {video_data['title']}, Chunks: {video_data['chunk_count']}"
+            "Video registered",
+            video_id=video_id,
+            title=video_data["title"],
+            chunk_count=video_data["chunk_count"],
         )
 
         return {"status": "registered", "video_id": video_id}
 
     def get_system_status(self):
-        """Return current system status for admin console"""
-        # Reset daily counter if needed
-        if time.time() - self.last_reset > 86400:  # 24 hours
+        if time.time() - self.last_reset > 86400:
             self.uploads_today = 0
             self.last_reset = time.time()
 
@@ -78,7 +72,7 @@ class MasterServer:
             1
             for s in self.chunk_servers.values()
             if time.time() - s["last_heartbeat"] < 60
-        )  # 60 second timeout
+        )
 
         total_storage_gb = sum(v["total_size"] for v in self.videos.values()) / (
             1024**3
@@ -95,12 +89,11 @@ class MasterServer:
         }
 
     def get_chunk_servers(self):
-        """Return list of active chunk servers"""
         active_servers = []
         current_time = time.time()
 
         for server_id, server_data in self.chunk_servers.items():
-            if current_time - server_data["last_heartbeat"] < 60:  # 60 second timeout
+            if current_time - server_data["last_heartbeat"] < 60:
                 active_servers.append(
                     {
                         "id": server_id,
@@ -113,18 +106,40 @@ class MasterServer:
         return active_servers
 
     def register_chunk(self, chunk_id, server_id, video_id):
-        """Register a chunk with a specific server"""
         logger.debug(
-            f"Chunk registered - Chunk: {chunk_id}, Server: {server_id}, Video: {video_id}"
+            "Chunk registered",
+            chunk_id=chunk_id,
+            server_id=server_id,
+            video_id=video_id,
         )
         return True
 
+    def list_videos(self):
+        video_list = []
+        for video_id, video_data in self.videos.items():
+            video_list.append(
+                {
+                    "video_id": video_id,
+                    "title": video_data.get("title", "Unknown"),
+                    "filename": video_data.get("filename", "Unknown"),
+                    "chunk_count": video_data.get("chunk_count", 0),
+                    "total_size": video_data.get("total_size", 0),
+                    "upload_time": video_data.get("upload_time", 0),
+                }
+            )
+        return video_list
+
+    def get_video_details(self, video_id):
+        if video_id in self.videos:
+            return self.videos[video_id]
+        return None
+
     def serve_forever(self):
-        """Start the server"""
         logger.info("Starting XML-RPC master server...")
         self.server.serve_forever()
 
 
 if __name__ == "__main__":
+    logger.add("master_server.log", serialize=True, rotation="10 MB")
     server = MasterServer()
     server.serve_forever()

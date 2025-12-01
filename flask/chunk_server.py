@@ -2,23 +2,14 @@
 import xmlrpc.client
 import time
 import threading
-import logging
+from loguru import logger
 import random
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("chunk_server.log"), logging.StreamHandler()],
-)
-logger = logging.getLogger("ChunkServer")
 
 
 class ChunkServer:
     def __init__(self, server_id, master_url):
         self.server_id = server_id
         self.master_url = master_url
-
         self.master = xmlrpc.client.ServerProxy(master_url)
 
         self.stored_chunks = set()
@@ -26,7 +17,6 @@ class ChunkServer:
         logger.info(f"Chunk Server {server_id} initialized")
 
     def start_heartbeat(self):
-        """Start periodic heartbeat to master"""
         self.running = True
 
         def heartbeat_loop():
@@ -45,7 +35,7 @@ class ChunkServer:
                 except Exception as e:
                     logger.error(f"Heartbeat failed: {e}")
 
-                time.sleep(30)  # Heartbeat every 30 seconds
+                time.sleep(30)
 
         threading.Thread(target=heartbeat_loop, daemon=True).start()
         logger.info("Heartbeat loop started")
@@ -55,21 +45,17 @@ class ChunkServer:
 
 
 if __name__ == "__main__":
-    # Create multiple chunk servers for demo
+    logger.add("chunk_server.log", serialize=True)
+
     servers = []
     for i in range(3):
         server = ChunkServer(f"chunk_server_{i}", "http://localhost:8000")
         server.start_heartbeat()
         servers.append(server)
-        logger.info(f"Started chunk server {i}")
 
     try:
-        # Keep servers running
-        logger.info("All chunk servers running. Press Ctrl+C to stop.")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        logger.info("Shutting down chunk servers...")
         for server in servers:
             server.stop()
-        logger.info("All chunk servers stopped")
