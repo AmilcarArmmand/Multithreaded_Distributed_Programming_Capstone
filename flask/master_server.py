@@ -45,6 +45,13 @@ class MasterServer:
         self.server.register_function(self.register_chunk)
         self.server.register_function(self.list_videos)
         self.server.register_function(self.get_video_details)
+        self.server.register_function(self.set_job_locations)
+        self.server.register_function(self.become_leader)
+    
+    def become_leader(self):
+        self.leader = True
+        logger.info("This server has become the leader master")
+        return True
 
     def ping(self):
         return "pong"
@@ -73,6 +80,10 @@ class MasterServer:
         )
         return {"status": "ack", "timestamp": current_time}
 
+    def set_job_locations(self, job_locations):
+        self.job_locations = job_locations
+        return True
+
     def register_video(self, video_data, job_id):
         video_id = video_data["video_id"]
         self.videos[video_id] = video_data
@@ -84,7 +95,7 @@ class MasterServer:
             title=video_data["title"],
             chunk_count=video_data["chunk_count"],
         )
-        
+
         current_chunk_server = self.job_locations.get(job_id)
         if current_chunk_server:
             try:
@@ -97,6 +108,7 @@ class MasterServer:
                 )
                 for chunk_server in self.chunk_servers.keys():
                     if chunk_server != current_chunk_server['id']:
+                        os.makedirs(f"videos/{chunk_server}", exist_ok=True)
                         path = os.path.join(f"videos/{chunk_server}", f"{chunk_server}_video_{job_id}.mp4")
                         if hasattr(video_data, "data"):      
                             data = video_data.data
@@ -160,6 +172,16 @@ class MasterServer:
             return self.job_locations[job_id]
         server = active_servers[random.randint(0, len(active_servers)-1)] if active_servers else None
         self.job_locations[job_id] = server
+        if self.leader:
+            try:
+                self.backup_master.set_job_locations(self.job_locations)
+                logger.debug(
+                    f"Job location for job {job_id} replicated to backup",
+                    job_id=job_id,
+                    server=server,
+                )
+            except Exception as e:
+                logger.error(f"Failed to replicate job location to backup: {e}")
         return server
 
     def register_chunk(self, chunk_id, server_id, video_id):

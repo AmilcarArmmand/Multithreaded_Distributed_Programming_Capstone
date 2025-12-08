@@ -49,6 +49,8 @@ class LeaderElection:
         with self.lock:
             self.down_server = self.leader
             self.leader, self.backup = self.backup, None
+            new_leader_proxy = ServerProxy(self.leader) 
+            new_leader_proxy.become_leader()
             logger.info(f"New leader elected: {self.leader}")
 
     def current_leader(self):
