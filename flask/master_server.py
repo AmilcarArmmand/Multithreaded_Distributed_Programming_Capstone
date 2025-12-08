@@ -6,7 +6,6 @@ from loguru import logger
 import time
 import sys
 import random
-from leader_election import LeaderElection
 
 class MasterServer:
     def __init__(self, host, port):
