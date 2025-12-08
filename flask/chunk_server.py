@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import xmlrpc.client
+from xmlrpc.client import ServerProxy
 import time
 import threading
 from loguru import logger
@@ -10,7 +10,8 @@ class ChunkServer:
     def __init__(self, server_id, master_url):
         self.server_id = server_id
         self.master_url = master_url
-        self.master = xmlrpc.client.ServerProxy(master_url)
+        self.master = ServerProxy(master_url)
+        self.election_proxy = ServerProxy("http://localhost:9000")
 
         self.stored_chunks = set()
         self.running = False
@@ -20,6 +21,7 @@ class ChunkServer:
         self.running = True
 
         def heartbeat_loop():
+            number_of_failures = 0
             while self.running:
                 try:
                     server_info = {
@@ -28,14 +30,25 @@ class ChunkServer:
                         "chunk_count": len(self.stored_chunks),
                         "version": "1.0",
                     }
-
-                    response = self.master.heartbeat(self.server_id, server_info)
-                    logger.debug(f"Heartbeat acknowledged: {response}")
+                    if number_of_failures < 3:
+                        response = self.master.heartbeat(self.server_id, server_info)
+                        logger.debug(f"Heartbeat acknowledged: {response}")
+                        number_of_failures = 0
 
                 except Exception as e:
-                    logger.error(f"Heartbeat failed: {e}")
+                    print("heartbeat error", number_of_failures)
+                    number_of_failures += 1
+                    if number_of_failures == 3:
+                        print("election called", number_of_failures)
+                        # exponentional backoff?
+                        print("switched master")
+                        self.master_url = self.election_proxy.current_leader()
+                        print(f"new master url: {self.master_url}")
+                        self.master = ServerProxy(self.master_url)
+                        logger.info(f"Switched to new master at {self.master_url}")
+                        number_of_failures = 0
 
-                time.sleep(30)
+                time.sleep(3)
 
         threading.Thread(target=heartbeat_loop, daemon=True).start()
         logger.info("Heartbeat loop started")

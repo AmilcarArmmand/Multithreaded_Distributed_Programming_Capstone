@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 from flask import Flask, request, jsonify, render_template_string
-import xmlrpc.client
+from xmlrpc.client import ServerProxy
 import time
 from loguru import logger
 import os
@@ -19,9 +19,10 @@ ALLOWED_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 
 class MasterClient:
     def __init__(self):
-        self.master = xmlrpc.client.ServerProxy(MASTER_SERVER_URL)
+        self.master = ServerProxy(MASTER_SERVER_URL)
         self.connected = False
         self.test_connection()
+        self.leader_election_proxy = ServerProxy("http://localhost:9000")
 
     def test_connection(self):
         try:
@@ -80,7 +81,7 @@ def chunk_file(file_path, chunk_size=10 * 1024 * 1024):  # 10MB chunks
 
 def upload_chunk_to_server(chunk_info, chunk_server):
     try:
-        time.sleep(0.1)  # Simulate upload time
+        time.sleep(3)  # Simulate upload time
         logger.info(f"Uploaded chunk {chunk_info['chunk_id']} to {chunk_server}")
         return True
     except Exception as e:
@@ -213,6 +214,7 @@ def upload_video():
 
 
 def process_video_upload(file_path, title, description):
+    number_of_failures = 0  
     try:
         logger.info(f"Processing video upload: {title}")
 
@@ -244,9 +246,17 @@ def process_video_upload(file_path, title, description):
         logger.info(f"Successfully uploaded video: {title}")
 
         os.remove(file_path)
+        number_of_failures = 0
 
     except Exception as e:
-        logger.error(f"Video processing failed: {e}")
+        number_of_failures += 1
+        if number_of_failures == 3:
+            logger.error(f"Video processing failed: {e}")
+            new_leader = master_client.leader_election_proxy.current_leader() 
+            master_client.master = ServerProxy(new_leader)
+            logger.info(f"Switched to new master at {new_leader}")
+            number_of_failures = 0
+
 
 
 @app.route("/api/metrics")
@@ -277,4 +287,4 @@ def get_servers():
 if __name__ == "__main__":
     logger.add("flask_app.log", serialize=True, rotation="10 MB")
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True)

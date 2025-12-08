@@ -1,16 +1,27 @@
 #!/usr/bin/python3
 from xmlrpc.server import SimpleXMLRPCServer
+from xmlrpc.client import ServerProxy
 from loguru import logger
 import time
-import threading
-from collections import defaultdict
+import sys
 
 
 class MasterServer:
-    def __init__(self, host="localhost", port=8000):
+    def __init__(self, host, port):
         self.server = SimpleXMLRPCServer(
-            (host, port), logRequests=False, allow_none=True
+            ("localhost", port), logRequests=False, allow_none=True
         )
+
+        if port == 8000:
+            self.leader = True
+            self.backup = "http://localhost:8001"
+            self.backup_master = ServerProxy(self.backup)
+            logger.info("This server is the leader master")
+        else:
+            self.leader = False
+            self.backup = None
+            self.backup_master = None
+            logger.info("This server is a backup master")
 
         # System state
         self.chunk_servers = {}
@@ -112,6 +123,17 @@ class MasterServer:
             server_id=server_id,
             video_id=video_id,
         )
+        if self.leader and self.backup_master:
+            try:
+                self.backup_master.register_chunk(chunk_id, server_id, video_id)
+                logger.debug(
+                    "Chunk registration replicated to backup",
+                    chunk_id=chunk_id,
+                    server_id=server_id,
+                    video_id=video_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to replicate chunk registration to backup: {e}")
         return True
 
     def list_videos(self):
@@ -141,5 +163,6 @@ class MasterServer:
 
 if __name__ == "__main__":
     logger.add("master_server.log", serialize=True, rotation="10 MB")
-    server = MasterServer()
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    server = MasterServer("localhost", port)
     server.serve_forever()
