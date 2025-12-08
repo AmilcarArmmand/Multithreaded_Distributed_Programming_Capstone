@@ -288,16 +288,6 @@ def get_metrics():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# @app.route("/api/servers")
-# def get_servers():
-#     try:
-#         servers = master_client.get_chunk_servers()
-#         return jsonify(servers)
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-
-
 if __name__ == "__main__":
     logger.add("flask_app.log", serialize=True, rotation="10 MB")
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
