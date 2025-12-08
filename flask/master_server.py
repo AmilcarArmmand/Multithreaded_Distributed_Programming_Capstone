@@ -4,6 +4,7 @@ from xmlrpc.client import ServerProxy
 from loguru import logger
 import time
 import sys
+import random
 
 
 class MasterServer:
@@ -114,7 +115,7 @@ class MasterServer:
                     }
                 )
 
-        return active_servers
+        return active_servers[random.randint(0, 2)]
 
     def register_chunk(self, chunk_id, server_id, video_id):
         logger.debug(

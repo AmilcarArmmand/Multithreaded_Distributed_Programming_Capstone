@@ -83,17 +83,24 @@ def upload_chunk_to_server(chunk_info, chunk_server):
     try:
         time.sleep(3)  # Simulate upload time
         logger.info(f"Uploaded chunk {chunk_info['chunk_id']} to {chunk_server}")
-        master_client.master.register_chunk(
-            chunk_info["chunk_id"], 1, "video_id_placeholder"
-        )
         return True
     except Exception as e:
         logger.error(f"Failed to upload chunk {chunk_info['chunk_id']}: {e}")
-        logger.error(f"Video processing failed: {e}")
-        new_leader = master_client.leader_election_proxy.current_leader() 
-        master_client.master = ServerProxy(new_leader)
-        logger.info(f"Switched to new master at {new_leader}")
         return False
+    # try:
+    #     time.sleep(3)  # Simulate upload time
+    #     logger.info(f"Uploaded chunk {chunk_info['chunk_id']} to {chunk_server}")
+    #     master_client.master.register_chunk(
+    #         chunk_info["chunk_id"], 1, "video_id_placeholder"
+    #     )
+    #     return True
+    # except Exception as e:
+    #     logger.error(f"Failed to upload chunk {chunk_info['chunk_id']}: {e}")
+    #     logger.error(f"Video processing failed: {e}")
+    #     new_leader = master_client.leader_election_proxy.current_leader() 
+    #     master_client.master = ServerProxy(new_leader)
+    #     logger.info(f"Switched to new master at {new_leader}")
+    #     return False
 
 
 # Flask Routes
@@ -227,17 +234,9 @@ def process_video_upload(file_path, title, description):
         chunks = chunk_file(file_path)
         logger.info(f"Split into {len(chunks)} chunks")
 
-        chunk_servers = master_client.get_chunk_servers()
-
-        # with ThreadPoolExecutor(max_workers=5) as executor:
-        # futures = []
         for chunk in chunks:
-            # server = chunk_servers[len(futures) % len(chunk_servers)]
-            # future = executor.submit(upload_chunk_to_server, chunk, server)
-            upload_chunk_to_server(chunk, 1)
-            # futures.append(future)
-
-        # results = [f.result() for f in futures]
+            chunk_servers = master_client.get_chunk_servers()
+            upload_chunk_to_server(chunk, chunk_servers)
 
         video_data = {
             "video_id": f"vid_{int(time.time())}",
@@ -256,6 +255,10 @@ def process_video_upload(file_path, title, description):
 
     except Exception as e:
         logger.error(f"Video processing failed: {e}")
+        new_leader = master_client.leader_election_proxy.current_leader() 
+        master_client.master = ServerProxy(new_leader)
+        logger.info(f"Switched to new master at {new_leader}")
+        return False
 
 
 
