@@ -222,8 +222,9 @@ def process_video_upload(file_path, title, description):
         chunks = chunk_file(file_path)
         logger.info(f"Split into {len(chunks)} chunks")
 
-        retries = 0
+        
         for chunk in chunks:
+            retries = 0
             print("uploading chunk", chunk["chunk_id"])
             
             while retries < 3:
@@ -237,11 +238,15 @@ def process_video_upload(file_path, title, description):
                     if retries == 3:
                         proxy = ServerProxy("http://localhost:9000")
                         new_leader = proxy.current_leader() 
-                        if new_leader == master_client.master._ServerProxy__host:
+                        current_url = f"http://{master_client.master._ServerProxy__host}"
+                        if new_leader == current_url:
+                            logger.error("Current server is leader but upload failed, retrying...")
                             time.sleep(2)
-                        master_client.master = ServerProxy(new_leader)
-                        logger.info(f"Switched to new master at {new_leader}")
-                        retries = 0
+                        else:   
+                            time.sleep(1)
+                            master_client.master = ServerProxy(new_leader)
+                            logger.info(f"Switched to new master at {new_leader}")
+                            retries = 0
                         
 
         video_data = {
