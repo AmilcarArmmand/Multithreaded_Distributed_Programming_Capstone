@@ -6,7 +6,7 @@ from loguru import logger
 import os
 from werkzeug.utils import secure_filename
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import uuid
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024 * 1024  # 16GB max upload
@@ -33,20 +33,20 @@ class MasterClient:
             logger.error(f"Failed to connect to master: {e}")
             self.connected = False
 
-    def register_upload(self, video_data):
+    def register_upload(self, video_data, job_id):
         if not self.connected:
             raise ConnectionError("Not connected to master server")
-        return self.master.register_video(video_data)
+        return self.master.register_video(video_data, job_id)
 
     def get_system_status(self):
         if not self.connected:
             return {"error": "Not connected to master"}
         return self.master.get_system_status()
 
-    def get_chunk_servers(self):
+    def get_chunk_servers(self, job_id):
         if not self.connected:
             return []
-        return self.master.get_chunk_servers()
+        return self.master.get_chunk_servers(job_id)
 
 
 # Global master client
@@ -79,28 +79,16 @@ def chunk_file(file_path, chunk_size=10 * 1024 * 1024):  # 10MB chunks
     return chunks
 
 
-def upload_chunk_to_server(chunk_info, chunk_server):
+def upload_chunk_to_server(chunk_info, chunk_server, job_id):
     try:
-        time.sleep(3)  # Simulate upload time
+        time.sleep(1)  # Simulate upload time
         logger.info(f"Uploaded chunk {chunk_info['chunk_id']} to {chunk_server}")
+        server_proxy = ServerProxy(f"http://localhost:{8005 + int(chunk_server['id'].split('_')[-1])}")
+        server_proxy.store_chunk(chunk_info["chunk_id"], chunk_info["data"], job_id)
         return True
     except Exception as e:
         logger.error(f"Failed to upload chunk {chunk_info['chunk_id']}: {e}")
         return False
-    # try:
-    #     time.sleep(3)  # Simulate upload time
-    #     logger.info(f"Uploaded chunk {chunk_info['chunk_id']} to {chunk_server}")
-    #     master_client.master.register_chunk(
-    #         chunk_info["chunk_id"], 1, "video_id_placeholder"
-    #     )
-    #     return True
-    # except Exception as e:
-    #     logger.error(f"Failed to upload chunk {chunk_info['chunk_id']}: {e}")
-    #     logger.error(f"Video processing failed: {e}")
-    #     new_leader = master_client.leader_election_proxy.current_leader() 
-    #     master_client.master = ServerProxy(new_leader)
-    #     logger.info(f"Switched to new master at {new_leader}")
-    #     return False
 
 
 # Flask Routes
@@ -108,7 +96,6 @@ def upload_chunk_to_server(chunk_info, chunk_server):
 def dashboard():
     try:
         system_status = master_client.get_system_status()
-        chunk_servers = master_client.get_chunk_servers()
     except Exception as e:
         system_status = {"error": str(e)}
         chunk_servers = []
@@ -229,14 +216,33 @@ def upload_video():
 
 def process_video_upload(file_path, title, description):
     try:
+        job_id = str(uuid.uuid4())
         logger.info(f"Processing video upload: {title}")
 
         chunks = chunk_file(file_path)
         logger.info(f"Split into {len(chunks)} chunks")
 
+        retries = 0
         for chunk in chunks:
-            chunk_servers = master_client.get_chunk_servers()
-            upload_chunk_to_server(chunk, chunk_servers)
+            print("uploading chunk", chunk["chunk_id"])
+            
+            while retries < 3:
+                try: 
+                    chunk_servers = master_client.get_chunk_servers(job_id)
+                    upload_chunk_to_server(chunk, chunk_servers, job_id)
+                    break
+                except Exception as e:
+                    logger.error(f"Video processing failed: {e}")
+                    retries += 1
+                    if retries == 3:
+                        proxy = ServerProxy("http://localhost:9000")
+                        new_leader = proxy.current_leader() 
+                        if new_leader == master_client.master._ServerProxy__host:
+                            time.sleep(2)
+                        master_client.master = ServerProxy(new_leader)
+                        logger.info(f"Switched to new master at {new_leader}")
+                        retries = 0
+                        
 
         video_data = {
             "video_id": f"vid_{int(time.time())}",
@@ -248,7 +254,7 @@ def process_video_upload(file_path, title, description):
             "upload_time": time.time(),
         }
 
-        master_client.register_upload(video_data)
+        master_client.register_upload(video_data, job_id)
         logger.info(f"Successfully uploaded video: {title}")
 
         os.remove(file_path)
@@ -278,13 +284,13 @@ def get_metrics():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/servers")
-def get_servers():
-    try:
-        servers = master_client.get_chunk_servers()
-        return jsonify(servers)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# @app.route("/api/servers")
+# def get_servers():
+#     try:
+#         servers = master_client.get_chunk_servers()
+#         return jsonify(servers)
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

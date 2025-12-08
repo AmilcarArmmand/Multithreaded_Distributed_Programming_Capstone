@@ -1,11 +1,12 @@
 #!/usr/bin/python3
+import os
 from xmlrpc.server import SimpleXMLRPCServer
 from xmlrpc.client import ServerProxy
 from loguru import logger
 import time
 import sys
 import random
-
+from leader_election import LeaderElection
 
 class MasterServer:
     def __init__(self, host, port):
@@ -30,6 +31,8 @@ class MasterServer:
         self.uploads_today = 0
         self.last_reset = time.time()
 
+        self.job_locations = {}
+
         self.setup_methods()
         logger.info(f"Master Server initialized on {host}:{port}")
 
@@ -53,6 +56,15 @@ class MasterServer:
             "info": server_info,
             "status": "healthy",
         }
+        if self.leader:
+            try:
+                self.backup_master.heartbeat(server_id, server_info)
+                logger.debug(
+                    f"Heartbeat replicated to backup for {server_id}",
+                    server_id=server_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to replicate heartbeat to backup: {e}")
 
         logger.info(
             f"Heartbeat from {server_id}",
@@ -61,7 +73,7 @@ class MasterServer:
         )
         return {"status": "ack", "timestamp": current_time}
 
-    def register_video(self, video_data):
+    def register_video(self, video_data, job_id):
         video_id = video_data["video_id"]
         self.videos[video_id] = video_data
         self.uploads_today += 1
@@ -72,6 +84,36 @@ class MasterServer:
             title=video_data["title"],
             chunk_count=video_data["chunk_count"],
         )
+        
+        current_chunk_server = self.job_locations.get(job_id)
+        if current_chunk_server:
+            try:
+                proxy = ServerProxy(f"http://localhost:{8005 + int(current_chunk_server["id"].split('_')[-1])}")
+                video_data = proxy.assemble_video(job_id)
+                logger.debug(
+                    f"Video metadata sent to chunk server {current_chunk_server['id']}",
+                    chunk_server=current_chunk_server,
+                    video_id=video_id,
+                )
+                for chunk_server in self.chunk_servers.keys():
+                    if chunk_server != current_chunk_server['id']:
+                        path = os.path.join(f"videos/{chunk_server}", f"{chunk_server}_video_{job_id}.mp4")
+                        if hasattr(video_data, "data"):      
+                            data = video_data.data
+                        with open(path, "wb") as f:
+                            f.write(data)
+            except Exception as e:
+                logger.error(
+                    f"Failed to send video metadata to chunk server {current_chunk_server['id']}: {e}",
+                    chunk_server=current_chunk_server,
+                    video_id=video_id,
+                )
+        else:
+            logger.warning(
+                f"No chunk server found for job {job_id} to notify about video {video_id}",
+                job_id=job_id,
+                video_id=video_id,
+            )
 
         return {"status": "registered", "video_id": video_id}
 
@@ -100,7 +142,7 @@ class MasterServer:
             "timestamp": time.time(),
         }
 
-    def get_chunk_servers(self):
+    def get_chunk_servers(self, job_id):
         active_servers = []
         current_time = time.time()
 
@@ -114,8 +156,11 @@ class MasterServer:
                         "info": server_data["info"],
                     }
                 )
-
-        return active_servers[random.randint(0, 2)]
+        if job_id in self.job_locations:
+            return self.job_locations[job_id]
+        server = active_servers[random.randint(0, len(active_servers)-1)] if active_servers else None
+        self.job_locations[job_id] = server
+        return server
 
     def register_chunk(self, chunk_id, server_id, video_id):
         logger.debug(
